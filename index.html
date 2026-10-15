@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Outage Map - Kenya</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: #fff; }
+        #map { height: 100vh; width: 100vw; z-index: 1; }
+        
+        /* Floating Glass Dashboard */
+        .dashboard {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 300px;
+            background: rgba(18, 18, 18, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            z-index: 1000;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        .dashboard h2 { margin: 0 0 15px 0; font-size: 20px; display: flex; align-items: center; gap: 8px; }
+        .stat-box {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .stat-value { font-size: 24px; font-weight: bold; }
+        .text-red { color: #ff5252; }
+        .text-orange { color: #ffa726; }
+
+        /* Modern Action Button */
+        .report-btn {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            padding: 16px 32px;
+            background: linear-gradient(135deg, #d32f2f, #b71c1c);
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 10px 20px rgba(211, 47, 47, 0.4);
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .report-btn:hover { transform: translateX(-50%) scale(1.05); }
+        .report-btn:active { transform: translateX(-50%) scale(0.95); }
+
+        /* Toast Notifications */
+        #toast-container {
+            position: absolute;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: none;
+        }
+        .toast {
+            background: #333;
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            animation: slideUp 0.3s ease forwards, fadeOut 0.5s ease 3s forwards;
+            font-weight: 500;
+        }
+        .toast.success { border-left: 4px solid #4caf50; }
+        .toast.error { border-left: 4px solid #f44336; }
+        .toast.info { border-left: 4px solid #2196f3; }
+
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeOut { to { opacity: 0; } }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard">
+        <h2>⚡ Power Grid Status</h2>
+        <div class="stat-box">
+            <span>Verified Outages</span>
+            <span class="stat-value text-red" id="stat-verified">0</span>
+        </div>
+        <div class="stat-box">
+            <span>Unconfirmed Reports</span>
+            <span class="stat-value text-orange" id="stat-unconfirmed">0</span>
+        </div>
+    </div>
+
+    <div id="map"></div>
+    <div id="toast-container"></div>
+    
+    <button class="report-btn" onclick="reportOutage()">
+        🚨 Report Power Outage
+    </button>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+       // Use Esri's free Dark Gray Canvas tiles (No API key needed)
+       const map = L.map('map').setView([-1.2921, 36.8219], 12);
+       L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+           attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ',
+        //    maxZoom: 16
+       }).addTo(map);
+        const outageLayerGroup = L.layerGroup().addTo(map);
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerText = message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3500);
+        }
+
+        function loadOutages() {
+            fetch('http://localhost:8000/api/outages')
+                .then(response => response.json())
+                .then(data => {
+                    outageLayerGroup.clearLayers(); 
+                    let verifiedCount = 0;
+                    let unconfirmedCount = 0;
+
+                    data.outages.forEach(outage => {
+                        const isVerified = outage.status === 'verified';
+                        if (isVerified) verifiedCount++; else unconfirmedCount++;
+
+                        const color = isVerified ? '#ff5252' : '#ffa726';
+                        
+                        const circle = L.circle([outage.latitude, outage.longitude], {
+                            color: color,
+                            fillColor: color,
+                            fillOpacity: 0.4,
+                            weight: 2,
+                            radius: 500
+                        });
+
+                        circle.bindPopup(`
+                            <div style="color: #333;">
+                                <strong style="font-size:16px;">${outage.area_name}</strong><br>
+                                Status: <b style="color:${color}">${outage.status.toUpperCase()}</b>
+                            </div>
+                        `);
+                        circle.addTo(outageLayerGroup);
+                    });
+
+                    // Update Dashboard DOM
+                    document.getElementById('stat-verified').innerText = verifiedCount;
+                    document.getElementById('stat-unconfirmed').innerText = unconfirmedCount;
+                })
+                .catch(err => console.error("Error fetching outages:", err));
+        }
+
+        let userId = localStorage.getItem('outage_user_id');
+        if (!userId) {
+            userId = crypto.randomUUID();
+            localStorage.setItem('outage_user_id', userId);
+        }
+
+        function reportOutage() {
+            if (!navigator.geolocation) {
+                showToast("Geolocation is not supported by your browser.", "error");
+                return;
+            }
+
+            const btn = document.querySelector('.report-btn');
+            btn.innerHTML = "⏳ Locating...";
+            btn.style.opacity = "0.7";
+
+            navigator.geolocation.getCurrentPosition(position => {
+                const payload = {
+                    user_id: userId,
+                    latitude: position.coords.latitude,
+                    longitude: position.coords.longitude
+                };
+
+                fetch('http://localhost:8000/api/reports', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                .then(async response => {
+                    const data = await response.json();
+                    if (response.ok) {
+                        showToast(data.message, "success");
+                        loadOutages();
+                    } else {
+                        showToast(data.detail, "error");
+                    }
+                })
+                .catch(err => showToast("Error connecting to server.", "error"))
+                .finally(() => {
+                    btn.innerHTML = "🚨 Report Power Outage";
+                    btn.style.opacity = "1";
+                });
+
+            }, () => {
+                showToast("Please allow location access to report.", "error");
+                btn.innerHTML = "🚨 Report Power Outage";
+                btn.style.opacity = "1";
+            });
+        }
+
+        loadOutages();
+        setInterval(loadOutages, 10000);
+    </script>
+</body>
+</html>
