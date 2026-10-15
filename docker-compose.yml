@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: outage_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file}
+      POSTGRES_DB: outage_tracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data:Z
+      # Map your local script to the container's init folder
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:Z
+    # Checks if Postgres is actually ready to accept connections
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d outage_tracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: outage_api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      # Pass the Docker-internal DB connection string here
+      - DB_DSN=${DB_DSN:?Set DB_DSN in your .env file}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgis_data:
